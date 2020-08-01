@@ -1,34 +1,114 @@
-// server.js
-// where your node app starts
+"use strict";
 
-// init project
-var express = require('express');
+var express = require("express");
+var mongo = require("mongodb");
+var mongoose = require("mongoose");
+const bodyParser = require("body-parser");
+const Schema = mongoose.Schema;
+let dns = require("dns");
+const cors = require("cors");
+
 var app = express();
 
-// enable CORS (https://en.wikipedia.org/wiki/Cross-origin_resource_sharing)
-// so that your API is remotely testable by FCC 
-var cors = require('cors');
-app.use(cors({optionSuccessStatus: 200}));  // some legacy browsers choke on 204
+// Basic Configuration
+var port = process.env.PORT || 3000;
 
-// http://expressjs.com/en/starter/static-files.html
-app.use(express.static('public'));
+/** this project needs a db !! **/
 
-// http://expressjs.com/en/starter/basic-routing.html
-app.get("/", function (req, res) {
-  res.sendFile(__dirname + '/views/index.html');
+mongoose
+  .connect(process.env.MONGO_URI, {
+    useUnifiedTopology: true,
+    useNewUrlParser: true
+  })
+  .then(() => console.log("DB Connected!"))
+  .catch(err => {
+    console.log(`DB Connection Error: ${err.message}`);
+  });
+
+// Mongoose Schema
+let db_url = new Schema({
+  short_URL: String,
+  url: String
 });
 
+let Model = mongoose.model("model", db_url, "short_URL");
 
-// API endpoint
-app.get('/api/whoami', (req, res)=>{
-  let ipaddress = req.headers['x-forwarded-for'].split(",")[0]
-  let software = req.headers['user-agent']
-  let language = req.headers["accept-language"]
-  res.json({ipaddress, language, software })
-})
+app.use(cors());
 
+// mounting the body-parser
+app.use(bodyParser.urlencoded({ extended: true }));
 
-// listen for requests :)
-var listener = app.listen(process.env.PORT, function () {
-  console.log('Your app is listening on port ' + listener.address().port);
+app.use("/public", express.static(process.cwd() + "/public"));
+
+app.get("/", function(req, res) {
+  res.sendFile(process.cwd() + "/views/index.html");
+});
+
+// redirect short url
+app.get("/api/shorturl/:short_URL", (req, res) => {
+  const input = req.params.short_URL;
+
+  Model.findOne({ short_URL: input }, (err, result) => {
+    if (result) {
+      res.redirect(`http://${result.url}`);
+    } else {
+      res.json({
+        error: "invalid URL"
+      });
+    }
+  });
+});
+
+// URL Convertor
+app.post("/api/shorturl/new", (req, res) => {
+  let url = req.body.url;
+
+  // remove https
+  url = url.replace(/^https?:\/\//, "");
+
+  //   if url is invalid
+  dns.lookup(url, (err, data) => {
+    if (err) {
+      //      show invalid URL
+      res.json({
+        error: "invalid URL"
+      });
+      //      if url is valid
+    } else {
+      //      loop through db
+      const url_finder = () =>
+        new Promise((res, rej) => {
+          res(Model.findOne({ url }));
+        });
+
+      url_finder().then(data => {
+        //     if url found in db
+        if (data) {
+          //       show it
+          res.json({
+            original_url: url,
+            short_url: data.short_URL
+          });
+        } else {
+          //      get collection length for id
+          Model.countDocuments({}, async function(err, count) {
+            let new_url = new Model({
+              short_URL: count + 1,
+              url
+            });
+            new_url.save();
+
+            res.json({
+              original_url: url,
+              short_url: count + 1
+            });
+          });
+        }
+      });
+    }
+  });
+});
+
+app.listen(port, function() {
+  console.log("Node.js listening ...");
 });
